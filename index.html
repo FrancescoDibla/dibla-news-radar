@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dibla News Radar</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Styles -->
+  <link rel="stylesheet" href="styles.css" />
+  <!-- Supabase client via CDN (per il futuro, anche se ora il mock non lo usa) -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2.48.0/dist/umd/supabase.js"></script>
+</head>
+<body>
+  <div class="app-root">
+    <aside class="sidebar">
+      <div class="logo-row">
+        <div class="logo-circle"></div>
+        <div>
+          <div class="logo-text-main">Dibla News Radar</div>
+          <div class="logo-text-sub">IT • Cyber • Compliance</div>
+        </div>
+      </div>
+
+      <div class="section-title">Categorie</div>
+      <button class="pill-btn active">
+        <span>IT &amp; Tech</span>
+        <span>●</span>
+      </button>
+      <button class="pill-btn">
+        <span>Cybersecurity</span>
+        <span>●</span>
+      </button>
+      <button class="pill-btn">
+        <span>Compliance &amp; Normativa</span>
+        <span>●</span>
+      </button>
+
+      <div class="section-title">Vista per ruolo</div>
+      <div class="pill-chip-row">
+        <div class="chip active">CISO / SOC</div>
+        <div class="chip">DPO / Compliance</div>
+        <div class="chip">Presales</div>
+      </div>
+
+      <div class="section-title">Settore</div>
+      <div class="pill-chip-row">
+        <div class="chip">PA &amp; Government</div>
+        <div class="chip">Finance</div>
+        <div class="chip">Manufacturing / OT</div>
+        <div class="chip">Healthcare</div>
+        <div class="chip">Telco / Cloud</div>
+      </div>
+
+      <div class="section-title">Timeframe</div>
+      <label class="time-radio">
+        <input type="radio" name="tf" value="24h" checked /> Ultime 24h
+      </label>
+      <label class="time-radio">
+        <input type="radio" name="tf" value="48h" /> 48h
+      </label>
+      <label class="time-radio">
+        <input type="radio" name="tf" value="72h" /> 72h
+      </label>
+      <label class="time-radio">
+        <input type="radio" name="tf" value="1week" /> 1 week
+      </label>
+
+      <div class="sidebar-footer">
+        Ultimo aggiornamento: <span id="last-update">–</span><br />
+        <span style="text-decoration: underline; cursor: pointer;">Impostazioni feed</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="breadcrumb">Dashboard / Radar</div>
+        <div class="search-wrap">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input id="search-input" placeholder="Cerca per parola chiave, normativa, vendor…" />
+          </div>
+          <div class="top-chips">
+            <div class="chip active">NIS2</div>
+            <div class="chip">Cybersecurity Act</div>
+            <div class="chip">ransomware</div>
+            <div class="chip">API security</div>
+            <div class="chip">Italia</div>
+          </div>
+        </div>
+        <div>
+          <div class="view-toggle">
+            <button class="active">Radar</button>
+            <button>Timeline</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="content-main">
+          <div id="loading" style="font-size:12px; color:#9ca3af;">Caricamento storie…</div>
+
+          <div id="hero-row" class="hero-row" style="display:none;"></div>
+
+          <div id="story-grid" class="story-grid" style="margin-top:12px;"></div>
+        </div>
+
+        <aside class="content-detail" id="detail-panel">
+          <p style="font-size: 12px; color: #9ca3af;">
+            Seleziona una storia per vedere i dettagli e le correlazioni.
+          </p>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <!-- App logic -->
+  <script src="app.js"></script>
+</body>
+</html>
