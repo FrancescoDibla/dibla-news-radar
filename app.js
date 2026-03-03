@@ -13,7 +13,7 @@ let selectedStory = null;
 const filterState = {
   category: 'ALL',     // ALL | IT | CYBER | COMPLIANCE
   search: '',
-  timeframe: '24h',    // '24h' | '48h' | '72h' | '1week'
+  timeframe: '24h',    // '24h' | '48h' | '72h' | '1week' | 'all'
   topicChip: null      // es. 'NIS2', 'Cybersecurity Act', 'ransomware', ...
 };
 
@@ -21,14 +21,16 @@ const filterState = {
 const heroRowEl = document.getElementById('hero-row');
 const storyGridEl = document.getElementById('story-grid');
 const detailPanelEl = document.getElementById('detail-panel');
+const linkedinBoxEl = document.getElementById('linkedin-box');
 const loadingEl = document.getElementById('loading');
 const lastUpdateEl = document.getElementById('last-update');
 const searchInputEl = document.getElementById('search-input');
 
 // Helpers selettori
-const categoryButtons = document.querySelectorAll('.pill-btn');
+const categoryButtons = document.querySelectorAll('.pill-btn[data-category]');
 const timeframeRadios = document.querySelectorAll('input[name="tf"]');
 const topicChipsTop = document.querySelectorAll('.top-chips .chip');
+const resetFiltersBtn = document.getElementById('reset-filters');
 
 // ---------- FUNZIONI DI UTILITÀ ----------
 
@@ -49,6 +51,7 @@ function mapCategoryLabel(cat) {
 }
 
 function matchesTimeframe(story, timeframe) {
+  if (timeframe === 'all') return true;
   if (!story.created_at && !story.published_at) return true;
 
   const refStr = story.published_at || story.created_at;
@@ -119,6 +122,28 @@ function getFilteredStories() {
   }
 
   return filtered;
+}
+
+// ---------- GENERAZIONE POST LINKEDIN (BOZZA) ----------
+
+function generateLinkedInDraft(story) {
+  const title = story.title_it || 'Aggiornamento cybersecurity';
+  const summary = story.summary_it || '';
+  const source = story.main_source_name || '';
+  const link = story.main_source_url || '';
+
+  const shortSummary = summary.length > 280 ? summary.slice(0, 277) + '...' : summary;
+
+  return (
+    `🔐 ${title}\n\n` +
+    (shortSummary ? `${shortSummary}\n\n` : '') +
+    `Punti chiave:\n` +
+    `• Contesto: ${story.main_category || 'Cybersecurity'}\n` +
+    `• Fonte: ${source || 'varie fonti affidabili'}\n` +
+    `• Timeframe: ${story.timeframe_label || 'ultime ore'}\n\n` +
+    (link ? `Approfondimento: ${link}\n\n` : '') +
+    `#cybersecurity #IT #compliance #DiblaNewsRadar`
+  );
 }
 
 // ---------- RENDER UI ----------
@@ -231,6 +256,8 @@ function renderDetail() {
         Seleziona una storia per vedere i dettagli e le correlazioni.
       </p>
     `;
+    linkedinBoxEl.style.display = 'none';
+    linkedinBoxEl.textContent = '';
     return;
   }
 
@@ -281,128 +308,4 @@ function renderDetail() {
       ${
         selectedStory.main_source_url
           ? `<a href="${selectedStory.main_source_url}" target="_blank" style="font-size:10px; color:#38bdf8; text-decoration:underline;">Apri articolo originale</a>`
-          : '<span style="font-size:10px; color:var(--text-muted);">Nessun link disponibile.</span>'
-      }
-    </div>
-
-    <div class="section-title">Fonti correlate</div>
-    <div class="detail-box">
-      <strong style="font-size:11px;">Securityinfo.it (IT)</strong><br />
-      <span style="font-size:10px;">“Titolo notizia correlata di esempio”</span><br />
-      <span style="font-size:10px; color:var(--text-muted);">
-        Breve snippet tradotto in italiano per illustrare la fonte correlata.
-      </span>
-    </div>
-    <div class="detail-box">
-      <strong style="font-size:11px;">SecurityWeek (US)</strong><br />
-      <span style="font-size:10px;">“Titolo notizia correlata di esempio”</span><br />
-      <span style="font-size:10px; color:var(--text-muted);">
-        Altro snippet tradotto in italiano (demo statica).
-      </span>
-    </div>
-  `;
-}
-
-// Rendering in base ai filtri correnti
-function applyFiltersAndRender() {
-  const filtered = getFilteredStories();
-  const hero = filtered.slice(0, 2);
-  const others = filtered.slice(2);
-
-  renderHero(hero);
-  renderGrid(others);
-
-  if (!selectedStory && filtered.length) {
-    selectedStory = hero[1] || hero[0] || others[0] || null;
-  }
-  renderDetail();
-}
-
-// ---------- EVENTI UI (FILTRI) ----------
-
-// Categorie sidebar
-categoryButtons.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    categoryButtons.forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    const text = btn.textContent.trim();
-    if (text.startsWith('IT')) filterState.category = 'IT';
-    else if (text.startsWith('Cybersecurity')) filterState.category = 'CYBER';
-    else if (text.startsWith('Compliance')) filterState.category = 'COMPLIANCE';
-    else filterState.category = 'ALL';
-
-    applyFiltersAndRender();
-  });
-});
-
-// Timeframe radio
-timeframeRadios.forEach((radio) => {
-  radio.addEventListener('change', () => {
-    if (radio.checked) {
-      filterState.timeframe = radio.value; // '24h', '48h', ...
-      applyFiltersAndRender();
-    }
-  });
-});
-
-// Search bar
-searchInputEl.addEventListener('input', () => {
-  filterState.search = searchInputEl.value || '';
-  applyFiltersAndRender();
-});
-
-// Chip topic in alto
-topicChipsTop.forEach((chip) => {
-  chip.addEventListener('click', () => {
-    // toggle stato
-    const alreadyActive = chip.classList.contains('active');
-    topicChipsTop.forEach((c) => c.classList.remove('active'));
-
-    if (alreadyActive) {
-      filterState.topicChip = null;
-    } else {
-      chip.classList.add('active');
-      filterState.topicChip = chip.textContent.trim();
-    }
-
-    applyFiltersAndRender();
-  });
-});
-
-// ---------- CARICAMENTO INIZIALE DA SUPABASE ----------
-
-async function loadStories() {
-  loadingEl.textContent = 'Caricamento storie da Supabase…';
-
-  const { data, error } = await client
-    .from('stories')
-    .select('*')
-    .order('impact_score', { ascending: false })
-    .limit(100);
-
-  if (error) {
-    console.error('Errore Supabase:', error);
-    loadingEl.textContent = 'Errore nel caricamento delle storie.';
-    return;
-  }
-
-  allStories = data || [];
-
-  const now = new Date();
-  lastUpdateEl.textContent = now.toLocaleTimeString('it-IT');
-  loadingEl.style.display = 'none';
-
-  if (!allStories.length) {
-    heroRowEl.style.display = 'none';
-    storyGridEl.innerHTML =
-      '<p style="font-size:12px; color:#9ca3af;">Nessuna storia presente nella tabella "stories".</p>';
-    return;
-  }
-
-  selectedStory = null;
-  applyFiltersAndRender();
-}
-
-// Avvio
-loadStories();
+          : '<span style="font-size:10px; color:var(--text-muted);">Nessun link
