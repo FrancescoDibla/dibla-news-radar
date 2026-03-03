@@ -9,6 +9,14 @@ const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let allStories = [];
 let selectedStory = null;
 
+// Stato filtri
+const filterState = {
+  category: 'ALL',     // ALL | IT | CYBER | COMPLIANCE
+  search: '',
+  timeframe: '24h',    // '24h' | '48h' | '72h' | '1week'
+  topicChip: null      // es. 'NIS2', 'Cybersecurity Act', 'ransomware', ...
+};
+
 // Elementi DOM
 const heroRowEl = document.getElementById('hero-row');
 const storyGridEl = document.getElementById('story-grid');
@@ -17,11 +25,103 @@ const loadingEl = document.getElementById('loading');
 const lastUpdateEl = document.getElementById('last-update');
 const searchInputEl = document.getElementById('search-input');
 
+// Helpers selettori
+const categoryButtons = document.querySelectorAll('.pill-btn');
+const timeframeRadios = document.querySelectorAll('input[name="tf"]');
+const topicChipsTop = document.querySelectorAll('.top-chips .chip');
+
+// ---------- FUNZIONI DI UTILITÀ ----------
+
 function formatCategoryBadgeClass(category) {
   if (!category) return 'badge-cat badge-cyber';
-  if (category.toUpperCase() === 'COMPLIANCE') return 'badge-cat badge-compliance';
+  const up = category.toUpperCase();
+  if (up === 'COMPLIANCE') return 'badge-cat badge-compliance';
+  if (up === 'IT') return 'badge-cat badge-cyber';
   return 'badge-cat badge-cyber';
 }
+
+function mapCategoryLabel(cat) {
+  if (!cat) return 'CYBER';
+  const up = cat.toUpperCase();
+  if (up === 'IT') return 'IT & Tech';
+  if (up === 'COMPLIANCE') return 'Compliance';
+  return 'Cyber';
+}
+
+function matchesTimeframe(story, timeframe) {
+  if (!story.created_at && !story.published_at) return true;
+
+  const refStr = story.published_at || story.created_at;
+  const refDate = new Date(refStr);
+  const now = new Date();
+  const diffMs = now - refDate;
+  const diffHours = diffMs / (1000 * 60 * 60);
+
+  switch (timeframe) {
+    case '24h':
+      return diffHours <= 24;
+    case '48h':
+      return diffHours <= 48;
+    case '72h':
+      return diffHours <= 72;
+    case '1week':
+      return diffHours <= 24 * 7;
+    default:
+      return true;
+  }
+}
+
+// Applica filtri in memoria
+function getFilteredStories() {
+  let filtered = [...allStories];
+
+  // Categoria
+  if (filterState.category !== 'ALL') {
+    filtered = filtered.filter((s) => {
+      if (!s.main_category) return false;
+      const up = s.main_category.toUpperCase();
+      if (filterState.category === 'CYBER') return up === 'CYBER';
+      if (filterState.category === 'COMPLIANCE') return up === 'COMPLIANCE';
+      if (filterState.category === 'IT') return up === 'IT';
+      return true;
+    });
+  }
+
+  // Timeframe
+  filtered = filtered.filter((s) => matchesTimeframe(s, filterState.timeframe));
+
+  // Search + topicChip
+  const q = filterState.search.trim().toLowerCase();
+  const topic = (filterState.topicChip || '').toLowerCase();
+
+  if (q || topic) {
+    filtered = filtered.filter((s) => {
+      const title = (s.title_it || '').toLowerCase();
+      const summary = (s.summary_it || '').toLowerCase();
+      const tags = (s.main_tags || []).map((t) => (t || '').toLowerCase());
+      const source = (s.main_source_name || '').toLowerCase();
+
+      const searchMatch = q
+        ? title.includes(q) ||
+          summary.includes(q) ||
+          tags.some((t) => t.includes(q)) ||
+          source.includes(q)
+        : true;
+
+      const topicMatch = topic
+        ? title.includes(topic) ||
+          summary.includes(topic) ||
+          tags.some((t) => t.includes(topic))
+        : true;
+
+      return searchMatch && topicMatch;
+    });
+  }
+
+  return filtered;
+}
+
+// ---------- RENDER UI ----------
 
 function renderHero(stories) {
   heroRowEl.innerHTML = '';
@@ -42,16 +142,18 @@ function renderHero(stories) {
 
     div.innerHTML = `
       <div class="${formatCategoryBadgeClass(hero1.main_category)}">
-        ${hero1.main_category || 'Categoria'}
+        ${mapCategoryLabel(hero1.main_category)}
       </div>
       <h2 class="hero-title">${hero1.title_it}</h2>
       <p class="hero-summary">${hero1.summary_it || 'Nessun riassunto disponibile.'}</p>
       <div class="pill-chip-row">
-        ${tags.map(t => `<div class="chip">${t}</div>`).join('')}
+        ${tags.map((t) => `<div class="chip">${t}</div>`).join('')}
       </div>
       <div class="hero-footer">
-        <span class="badge-sources">8 fonti correlate</span>
-        <span>${hero1.timeframe_label || 'recenti'}</span>
+        <span class="badge-sources">
+          ${hero1.main_source_name || 'Fonte sconosciuta'}
+        </span>
+        <span>${hero1.timeframe_label || filterState.timeframe}</span>
       </div>
     `;
     heroRowEl.appendChild(div);
@@ -65,16 +167,18 @@ function renderHero(stories) {
 
     div.innerHTML = `
       <div class="${formatCategoryBadgeClass(hero2.main_category)}">
-        ${hero2.main_category || 'Categoria'}
+        ${mapCategoryLabel(hero2.main_category)}
       </div>
       <h2 class="hero-title">${hero2.title_it}</h2>
       <p class="hero-summary">${hero2.summary_it || 'Nessun riassunto disponibile.'}</p>
       <div class="pill-chip-row">
-        ${tags.map(t => `<div class="chip">${t}</div>`).join('')}
+        ${tags.map((t) => `<div class="chip">${t}</div>`).join('')}
       </div>
       <div class="hero-footer">
-        <span class="badge-sources">12 fonti correlate</span>
-        <span>${hero2.timeframe_label || 'recenti'}</span>
+        <span class="badge-sources">
+          ${hero2.main_source_name || 'Fonte sconosciuta'}
+        </span>
+        <span>${hero2.timeframe_label || filterState.timeframe}</span>
       </div>
     `;
     heroRowEl.appendChild(div);
@@ -83,7 +187,13 @@ function renderHero(stories) {
 
 function renderGrid(stories) {
   storyGridEl.innerHTML = '';
-  stories.forEach(story => {
+  if (!stories.length) {
+    storyGridEl.innerHTML =
+      '<p style="font-size:12px; color:#9ca3af;">Nessuna storia per i filtri selezionati.</p>';
+    return;
+  }
+
+  stories.forEach((story) => {
     const tags = story.main_tags || [];
     const div = document.createElement('article');
     div.className = 'story-card';
@@ -91,15 +201,17 @@ function renderGrid(stories) {
 
     div.innerHTML = `
       <div class="${formatCategoryBadgeClass(story.main_category)}" style="margin-bottom:4px;">
-        ${story.main_category || 'Categoria'}
+        ${mapCategoryLabel(story.main_category)}
       </div>
       <h3 class="story-title">${story.title_it}</h3>
       <p class="story-summary">${story.summary_it || 'Nessun riassunto disponibile.'}</p>
       <div class="pill-chip-row">
-        ${tags.slice(0, 3).map(t => `<div class="chip">${t}</div>`).join('')}
+        ${tags.slice(0, 3).map((t) => `<div class="chip">${t}</div>`).join('')}
       </div>
       <div class="story-footer">
-        <span>${story.timeframe_label || 'recenti'}</span>
+        <span>
+          ${(story.main_source_name || 'Fonte sconosciuta')} • ${(story.timeframe_label || filterState.timeframe)}
+        </span>
         <span class="badge-sources-small">+X fonti correlate</span>
       </div>
     `;
@@ -127,7 +239,7 @@ function renderDetail() {
   detailPanelEl.innerHTML = `
     <h2 class="detail-title">${selectedStory.title_it}</h2>
     <p class="detail-sub">
-      Panoramica da più fonti (demo). Timeframe: ${selectedStory.timeframe_label || 'recenti'}.
+      Panoramica da più fonti (demo). Timeframe: ${selectedStory.timeframe_label || filterState.timeframe}.
     </p>
 
     <div class="detail-box">
@@ -158,7 +270,19 @@ function renderDetail() {
 
     <div class="section-title">Tag principali</div>
     <div class="detail-tags">
-      ${tags.map(t => `<div class="detail-tag">${t}</div>`).join('')}
+      ${tags.map((t) => `<div class="detail-tag">${t}</div>`).join('')}
+    </div>
+
+    <div class="section-title">Fonte principale</div>
+    <div class="detail-box">
+      <strong style="font-size:11px;">
+        ${selectedStory.main_source_name || 'Non specificata'}
+      </strong><br />
+      ${
+        selectedStory.main_source_url
+          ? `<a href="${selectedStory.main_source_url}" target="_blank" style="font-size:10px; color:#38bdf8; text-decoration:underline;">Apri articolo originale</a>`
+          : '<span style="font-size:10px; color:var(--text-muted);">Nessun link disponibile.</span>'
+      }
     </div>
 
     <div class="section-title">Fonti correlate</div>
@@ -179,25 +303,75 @@ function renderDetail() {
   `;
 }
 
-function applySearchFilter() {
-  const q = (searchInputEl.value || '').toLowerCase();
-  let filtered = [...allStories];
-  if (q) {
-    filtered = filtered.filter(story =>
-      story.title_it.toLowerCase().includes(q) ||
-      (story.summary_it || '').toLowerCase().includes(q) ||
-      (story.main_tags || []).some(t => t.toLowerCase().includes(q))
-    );
-  }
-
+// Rendering in base ai filtri correnti
+function applyFiltersAndRender() {
+  const filtered = getFilteredStories();
   const hero = filtered.slice(0, 2);
   const others = filtered.slice(2);
 
   renderHero(hero);
   renderGrid(others);
+
+  if (!selectedStory && filtered.length) {
+    selectedStory = hero[1] || hero[0] || others[0] || null;
+  }
+  renderDetail();
 }
 
-// Carica stories da Supabase
+// ---------- EVENTI UI (FILTRI) ----------
+
+// Categorie sidebar
+categoryButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    categoryButtons.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const text = btn.textContent.trim();
+    if (text.startsWith('IT')) filterState.category = 'IT';
+    else if (text.startsWith('Cybersecurity')) filterState.category = 'CYBER';
+    else if (text.startsWith('Compliance')) filterState.category = 'COMPLIANCE';
+    else filterState.category = 'ALL';
+
+    applyFiltersAndRender();
+  });
+});
+
+// Timeframe radio
+timeframeRadios.forEach((radio) => {
+  radio.addEventListener('change', () => {
+    if (radio.checked) {
+      filterState.timeframe = radio.value; // '24h', '48h', ...
+      applyFiltersAndRender();
+    }
+  });
+});
+
+// Search bar
+searchInputEl.addEventListener('input', () => {
+  filterState.search = searchInputEl.value || '';
+  applyFiltersAndRender();
+});
+
+// Chip topic in alto
+topicChipsTop.forEach((chip) => {
+  chip.addEventListener('click', () => {
+    // toggle stato
+    const alreadyActive = chip.classList.contains('active');
+    topicChipsTop.forEach((c) => c.classList.remove('active'));
+
+    if (alreadyActive) {
+      filterState.topicChip = null;
+    } else {
+      chip.classList.add('active');
+      filterState.topicChip = chip.textContent.trim();
+    }
+
+    applyFiltersAndRender();
+  });
+});
+
+// ---------- CARICAMENTO INIZIALE DA SUPABASE ----------
+
 async function loadStories() {
   loadingEl.textContent = 'Caricamento storie da Supabase…';
 
@@ -205,7 +379,7 @@ async function loadStories() {
     .from('stories')
     .select('*')
     .order('impact_score', { ascending: false })
-    .limit(30);
+    .limit(100);
 
   if (error) {
     console.error('Errore Supabase:', error);
@@ -217,7 +391,6 @@ async function loadStories() {
 
   const now = new Date();
   lastUpdateEl.textContent = now.toLocaleTimeString('it-IT');
-
   loadingEl.style.display = 'none';
 
   if (!allStories.length) {
@@ -227,22 +400,9 @@ async function loadStories() {
     return;
   }
 
-  const hero = allStories.slice(0, 2);
-  const others = allStories.slice(2);
-
-  renderHero(hero);
-  renderGrid(others);
-
-  if (!selectedStory) {
-    selectedStory = hero[1] || hero[0] || others[0] || null;
-  }
-  renderDetail();
+  selectedStory = null;
+  applyFiltersAndRender();
 }
-
-// Event listeners
-searchInputEl.addEventListener('input', () => {
-  applySearchFilter();
-});
 
 // Avvio
 loadStories();
