@@ -2,19 +2,17 @@
 const SUPABASE_URL = 'https://ucbtlovcinjkqmkobmxb.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_g0UnsYuXG-mHe3gCH_lj5A__jlAqD7q';
 
-// Inizializza Supabase (CDN UMD espone window.supabase)
+// Inizializza Supabase
 const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Stato in memoria
 let allStories = [];
 let selectedStory = null;
 
-// Stato filtri
+// Stato filtri (solo timeframe + search)
 const filterState = {
-  category: 'ALL',     // ALL | IT | CYBER | COMPLIANCE
-  search: '',
-  timeframe: '24h',    // '24h' | '48h' | '72h' | '1week' | 'all'
-  topicChip: null      // es. 'NIS2', 'Cybersecurity Act', 'ransomware', ...
+  timeframe: '24h',    // '3h' | '24h' | '48h' | '72h' | '1week' | 'all'
+  search: ''
 };
 
 // Elementi DOM
@@ -22,45 +20,45 @@ const heroRowEl = document.getElementById('hero-row');
 const storyGridEl = document.getElementById('story-grid');
 const detailPanelEl = document.getElementById('detail-panel');
 const linkedinBoxEl = document.getElementById('linkedin-box');
+const linkedinSummaryBoxEl = document.getElementById('linkedin-summary-box');
 const loadingEl = document.getElementById('loading');
 const lastUpdateEl = document.getElementById('last-update');
 const searchInputEl = document.getElementById('search-input');
 
-// Helpers selettori
-const categoryButtons = document.querySelectorAll('.pill-btn[data-category]');
+// Selettori filtri
 const timeframeRadios = document.querySelectorAll('input[name="tf"]');
-const topicChipsTop = document.querySelectorAll('.top-chips .chip');
 const resetFiltersBtn = document.getElementById('reset-filters');
 
-// ---------- FUNZIONI DI UTILITÀ ----------
+// ---------- UTILITIES ----------
 
 function formatCategoryBadgeClass(category) {
   if (!category) return 'badge-cat badge-cyber';
   const up = category.toUpperCase();
   if (up === 'COMPLIANCE') return 'badge-cat badge-compliance';
-  if (up === 'IT') return 'badge-cat badge-cyber';
   return 'badge-cat badge-cyber';
 }
 
 function mapCategoryLabel(cat) {
   if (!cat) return 'CYBER';
   const up = cat.toUpperCase();
-  if (up === 'IT') return 'IT & Tech';
   if (up === 'COMPLIANCE') return 'Compliance';
   return 'Cyber';
 }
 
 function matchesTimeframe(story, timeframe) {
   if (timeframe === 'all') return true;
-  if (!story.created_at && !story.published_at) return true;
 
   const refStr = story.published_at || story.created_at;
+  if (!refStr) return true;
+
   const refDate = new Date(refStr);
   const now = new Date();
   const diffMs = now - refDate;
   const diffHours = diffMs / (1000 * 60 * 60);
 
   switch (timeframe) {
+    case '3h':
+      return diffHours <= 3;
     case '24h':
       return diffHours <= 24;
     case '48h':
@@ -68,82 +66,124 @@ function matchesTimeframe(story, timeframe) {
     case '72h':
       return diffHours <= 72;
     case '1week':
-      return diffHours <= 24 * 7;
+      return diffHours <= 7 * 24;
     default:
       return true;
   }
 }
 
-// Applica filtri in memoria
+// Hotness semplice: più score = più “hot”
+function computeHotScore(story) {
+  let score = Number(story.impact_score || 0);
+
+  const title = (story.title_it || '').toLowerCase();
+  const summary = (story.summary_it || '').toLowerCase();
+  const text = title + ' ' + summary;
+
+  const now = new Date();
+  const refStr = story.published_at || story.created_at;
+  if (refStr) {
+    const ageHours = (now - new Date(refStr)) / (1000 * 60 * 60);
+    if (ageHours <= 3) score += 5;
+    else if (ageHours <= 24) score += 3;
+    else if (ageHours <= 48) score += 1;
+  }
+
+  const keywords = [
+    { k: 'ransomware', w: 5 },
+    { k: 'zero-day', w: 4 },
+    { k: 'zero day', w: 4 },
+    { k: 'supply chain', w: 3 },
+    { k: 'nis2', w: 3 },
+    { k: 'critical vulnerability', w: 3 },
+    { k: 'cve-', w: 2 }
+  ];
+  keywords.forEach(({ k, w }) => {
+    if (text.includes(k)) score += w;
+  });
+
+  const source = (story.main_source_name || '').toLowerCase();
+  if (source.includes('securityinfo')) score += 2;
+  if (source.includes('csirt') || source.includes('cert')) score += 3;
+
+  return score;
+}
+
 function getFilteredStories() {
   let filtered = [...allStories];
 
-  // Categoria
-  if (filterState.category !== 'ALL') {
-    filtered = filtered.filter((s) => {
-      if (!s.main_category) return false;
-      const up = s.main_category.toUpperCase();
-      if (filterState.category === 'CYBER') return up === 'CYBER';
-      if (filterState.category === 'COMPLIANCE') return up === 'COMPLIANCE';
-      if (filterState.category === 'IT') return up === 'IT';
-      return true;
-    });
-  }
-
-  // Timeframe
   filtered = filtered.filter((s) => matchesTimeframe(s, filterState.timeframe));
 
-  // Search + topicChip
   const q = filterState.search.trim().toLowerCase();
-  const topic = (filterState.topicChip || '').toLowerCase();
-
-  if (q || topic) {
+  if (q) {
     filtered = filtered.filter((s) => {
       const title = (s.title_it || '').toLowerCase();
       const summary = (s.summary_it || '').toLowerCase();
-      const tags = (s.main_tags || []).map((t) => (t || '').toLowerCase());
       const source = (s.main_source_name || '').toLowerCase();
-
-      const searchMatch = q
-        ? title.includes(q) ||
-          summary.includes(q) ||
-          tags.some((t) => t.includes(q)) ||
-          source.includes(q)
-        : true;
-
-      const topicMatch = topic
-        ? title.includes(topic) ||
-          summary.includes(topic) ||
-          tags.some((t) => t.includes(topic))
-        : true;
-
-      return searchMatch && topicMatch;
+      return (
+        title.includes(q) ||
+        summary.includes(q) ||
+        source.includes(q)
+      );
     });
   }
 
+  filtered.sort((a, b) => computeHotScore(b) - computeHotScore(a));
   return filtered;
 }
 
-// ---------- GENERAZIONE POST LINKEDIN (BOZZA) ----------
+// ---------- GENERAZIONE POST LINKEDIN ----------
 
 function generateLinkedInDraft(story) {
   const title = story.title_it || 'Aggiornamento cybersecurity';
   const summary = story.summary_it || '';
   const source = story.main_source_name || '';
   const link = story.main_source_url || '';
+  const shortSummary = summary.length > 320 ? summary.slice(0, 317) + '…' : summary;
 
-  const shortSummary = summary.length > 280 ? summary.slice(0, 277) + '...' : summary;
+  let text = '🔐 ' + title + '\n\n';
+  if (shortSummary) text += shortSummary + '\n\n';
 
-  return (
-    '🔐 ' + title + '\n\n' +
-    (shortSummary ? shortSummary + '\n\n' : '') +
-    'Punti chiave:\n' +
-    '• Contesto: ' + (story.main_category || 'Cybersecurity') + '\n' +
-    '• Fonte: ' + (source || 'varie fonti affidabili') + '\n' +
-    '• Timeframe: ' + (story.timeframe_label || 'ultime ore') + '\n\n' +
-    (link ? 'Approfondimento: ' + link + '\n\n' : '') +
-    '#cybersecurity #IT #compliance #DiblaNewsRadar'
-  );
+  text += 'Punti chiave:\n';
+  text += '• Contesto: ' + (story.main_category || 'Cybersecurity') + '\n';
+  text += '• Fonte: ' + (source || 'fonti affidabili') + '\n';
+  text += '• Timeframe: ' + (story.timeframe_label || 'ultime ore') + '\n\n';
+
+  if (link) text += 'Approfondimento: ' + link + '\n\n';
+  text += '#cybersecurity #infosec #DiblaNewsRadar';
+
+  return text;
+}
+
+function generateLinkedInSummary(stories, timeframeLabel) {
+  if (!stories.length) {
+    return 'Nessuna hot news disponibile per il periodo selezionato.';
+  }
+
+  const top = stories.slice(0, 5);
+
+  let header = '🧭 Hot cyber & compliance news ' + timeframeLabel + '\n\n';
+  let body = '';
+
+  top.forEach((s, idx) => {
+    const title = s.title_it || 'Notizia';
+    const source = s.main_source_name || 'Fonte';
+    const link = s.main_source_url || '';
+    const summary = s.summary_it || '';
+    const shortSummary = summary.length > 200 ? summary.slice(0, 197) + '…' : summary;
+
+    body += (idx + 1) + ') ' + title + '\n';
+    if (shortSummary) body += '   ' + shortSummary + '\n';
+    body += '   Fonte: ' + source;
+    if (link) body += ' | ' + link;
+    body += '\n\n';
+  });
+
+  const footer =
+    'Come stai adattando la tua strategia a queste evoluzioni?\n\n' +
+    '#cybersecurity #threatintel #DiblaNewsRadar';
+
+  return header + body + footer;
 }
 
 // ---------- RENDER UI ----------
@@ -160,7 +200,6 @@ function renderHero(stories) {
   const hero2 = stories[1];
 
   if (hero1) {
-    const tags = hero1.main_tags || [];
     const div = document.createElement('article');
     div.className = 'hero-card';
     div.onclick = () => selectStory(hero1);
@@ -171,9 +210,6 @@ function renderHero(stories) {
       </div>
       <h2 class="hero-title">${hero1.title_it}</h2>
       <p class="hero-summary">${hero1.summary_it || 'Nessun riassunto disponibile.'}</p>
-      <div class="pill-chip-row">
-        ${tags.map((t) => `<div class="chip">${t}</div>`).join('')}
-      </div>
       <div class="hero-footer">
         <span class="badge-sources">
           ${hero1.main_source_name || 'Fonte sconosciuta'}
@@ -185,7 +221,6 @@ function renderHero(stories) {
   }
 
   if (hero2) {
-    const tags = hero2.main_tags || [];
     const div = document.createElement('article');
     div.className = 'hero-card';
     div.onclick = () => selectStory(hero2);
@@ -196,9 +231,6 @@ function renderHero(stories) {
       </div>
       <h2 class="hero-title">${hero2.title_it}</h2>
       <p class="hero-summary">${hero2.summary_it || 'Nessun riassunto disponibile.'}</p>
-      <div class="pill-chip-row">
-        ${tags.map((t) => `<div class="chip">${t}</div>`).join('')}
-      </div>
       <div class="hero-footer">
         <span class="badge-sources">
           ${hero2.main_source_name || 'Fonte sconosciuta'}
@@ -214,12 +246,11 @@ function renderGrid(stories) {
   storyGridEl.innerHTML = '';
   if (!stories.length) {
     storyGridEl.innerHTML =
-      '<p style="font-size:12px; color:#9ca3af;">Nessuna storia per i filtri selezionati.</p>';
+      '<p style="font-size:12px; color:#9ca3af;">Nessuna storia per il timeframe selezionato.</p>';
     return;
   }
 
   stories.forEach((story) => {
-    const tags = story.main_tags || [];
     const div = document.createElement('article');
     div.className = 'story-card';
     div.onclick = () => selectStory(story);
@@ -230,14 +261,11 @@ function renderGrid(stories) {
       </div>
       <h3 class="story-title">${story.title_it}</h3>
       <p class="story-summary">${story.summary_it || 'Nessun riassunto disponibile.'}</p>
-      <div class="pill-chip-row">
-        ${tags.slice(0, 3).map((t) => `<div class="chip">${t}</div>`).join('')}
-      </div>
       <div class="story-footer">
         <span>
           ${(story.main_source_name || 'Fonte sconosciuta')} • ${(story.timeframe_label || filterState.timeframe)}
         </span>
-        <span class="badge-sources-small">+X fonti correlate</span>
+        <span class="badge-sources-small">HOT score: ${computeHotScore(story)}</span>
       </div>
     `;
     storyGridEl.appendChild(div);
@@ -253,88 +281,92 @@ function renderDetail() {
   if (!selectedStory) {
     detailPanelEl.innerHTML = `
       <p style="font-size: 12px; color: #9ca3af;">
-        Seleziona una storia per vedere i dettagli e le correlazioni.
+        Seleziona una storia per vedere i dettagli e generare una bozza LinkedIn.
       </p>
     `;
-    if (linkedinBoxEl) {
-      linkedinBoxEl.style.display = 'none';
-      linkedinBoxEl.textContent = '';
-    }
+    linkedinBoxEl.style.display = 'none';
+    linkedinSummaryBoxEl.style.display = 'none';
     return;
   }
 
-  const tags = selectedStory.main_tags || [];
+  const story = selectedStory;
 
   detailPanelEl.innerHTML = `
-    <h2 class="detail-title">${selectedStory.title_it}</h2>
+    <h2 class="detail-title">${story.title_it}</h2>
     <p class="detail-sub">
-      Panoramica da più fonti (demo). Timeframe: ${selectedStory.timeframe_label || filterState.timeframe}.
+      Timeframe: ${story.timeframe_label || filterState.timeframe} • Fonte: ${story.main_source_name || 'n/d'}
     </p>
 
     <div class="detail-box">
-      ${selectedStory.summary_it || 'Nessun riassunto disponibile.'}
-    </div>
-
-    <div class="section-title">Timeline eventi</div>
-    <div class="timeline">
-      <div class="timeline-item">
-        <div class="timeline-meta">Ieri 09:15 • Fonte A • IT</div>
-        <div class="timeline-title">
-          Notizia correlata di esempio (demo statica).
-        </div>
-      </div>
-      <div class="timeline-item">
-        <div class="timeline-meta">Ieri 10:40 • Fonte B • US</div>
-        <div class="timeline-title">
-          Altra notizia correlata di esempio (demo).
-        </div>
-      </div>
-      <div class="timeline-item">
-        <div class="timeline-meta">Oggi 08:05 • Fonte C • EU</div>
-        <div class="timeline-title">
-          Nuovo update su stesso argomento (demo).
-        </div>
-      </div>
-    </div>
-
-    <div class="section-title">Tag principali</div>
-    <div class="detail-tags">
-      ${tags.map((t) => `<div class="detail-tag">${t}</div>`).join('')}
+      ${story.summary_it || 'Nessun riassunto disponibile.'}
     </div>
 
     <div class="section-title">Fonte principale</div>
     <div class="detail-box">
       <strong style="font-size:11px;">
-        ${selectedStory.main_source_name || 'Non specificata'}
+        ${story.main_source_name || 'Non specificata'}
       </strong><br />
       ${
-        selectedStory.main_source_url
-          ? `<a href="${selectedStory.main_source_url}" target="_blank" style="font-size:10px; color:#38bdf8; text-decoration:underline;">Apri articolo originale</a>`
+        story.main_source_url
+          ? `<a href="${story.main_source_url}" target="_blank" style="font-size:10px; color:#38bdf8; text-decoration:underline;">Apri articolo originale</a>`
           : '<span style="font-size:10px; color:var(--text-muted);">Nessun link disponibile.</span>'
       }
     </div>
 
     <button id="generate-linkedin" class="pill-btn" style="margin:8px 0;">
-      <span>Genera bozza post LinkedIn</span>
+      <span>Bozza LinkedIn (singola news)</span>
       <span>✎</span>
+    </button>
+
+    <button id="generate-linkedin-summary" class="pill-btn" style="margin:0 0 4px 0;">
+      <span>Riepilogo LinkedIn (${getTimeframeLabel(filterState.timeframe)})</span>
+      <span>🧾</span>
     </button>
   `;
 
-  if (linkedinBoxEl) {
-    detailPanelEl.appendChild(linkedinBoxEl);
-  }
+  detailPanelEl.appendChild(linkedinBoxEl);
+  detailPanelEl.appendChild(linkedinSummaryBoxEl);
 
-  const btn = document.getElementById('generate-linkedin');
-  if (btn && linkedinBoxEl) {
-    btn.addEventListener('click', () => {
-      const draft = generateLinkedInDraft(selectedStory);
-      linkedinBoxEl.style.display = 'block';
-      linkedinBoxEl.textContent = draft;
-    });
+  const btnSingle = document.getElementById('generate-linkedin');
+  const btnSummary = document.getElementById('generate-linkedin-summary');
+
+  btnSingle.addEventListener('click', () => {
+    const draft = generateLinkedInDraft(story);
+    linkedinBoxEl.style.display = 'block';
+    linkedinBoxEl.textContent = draft;
+  });
+
+  btnSummary.addEventListener('click', () => {
+    const currentStories = getFilteredStories();
+    const draftSummary = generateLinkedInSummary(
+      currentStories,
+      getTimeframeLabel(filterState.timeframe)
+    );
+    linkedinSummaryBoxEl.style.display = 'block';
+    linkedinSummaryBoxEl.textContent = draftSummary;
+  });
+}
+
+function getTimeframeLabel(tf) {
+  switch (tf) {
+    case '3h':
+      return 'ultime 3 ore';
+    case '24h':
+      return 'ultime 24 ore';
+    case '48h':
+      return 'ultime 48 ore';
+    case '72h':
+      return 'ultimi 3 giorni';
+    case '1week':
+      return 'ultima settimana';
+    case 'all':
+      return 'periodo completo';
+    default:
+      return tf;
   }
 }
 
-// Rendering in base ai filtri correnti
+// Rendering in base a filtri
 function applyFiltersAndRender() {
   const filtered = getFilteredStories();
   const hero = filtered.slice(0, 2);
@@ -344,83 +376,48 @@ function applyFiltersAndRender() {
   renderGrid(others);
 
   if (!selectedStory && filtered.length) {
-    selectedStory = hero[1] || hero[0] || others[0] || null;
+    selectedStory = hero[0] || others[0] || null;
   }
   renderDetail();
 }
 
-// ---------- EVENTI UI (FILTRI) ----------
-
-// Categorie sidebar
-categoryButtons.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    categoryButtons.forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    const cat = btn.getAttribute('data-category');
-    filterState.category = cat || 'ALL';
-
-    applyFiltersAndRender();
-  });
-});
+// ---------- EVENTI UI ----------
 
 // Timeframe radio
 timeframeRadios.forEach((radio) => {
   radio.addEventListener('change', () => {
     if (radio.checked) {
-      filterState.timeframe = radio.value; // '24h', '48h', '72h', '1week', 'all'
+      filterState.timeframe = radio.value;
+      selectedStory = null;
+      linkedinBoxEl.style.display = 'none';
+      linkedinSummaryBoxEl.style.display = 'none';
       applyFiltersAndRender();
     }
   });
 });
 
-// Search bar
-searchInputEl.addEventListener('input', () => {
-  filterState.search = searchInputEl.value || '';
+// Reset timeframe
+resetFiltersBtn.addEventListener('click', () => {
+  filterState.timeframe = '24h';
+  timeframeRadios.forEach((r) => {
+    r.checked = r.value === '24h';
+  });
+  selectedStory = null;
+  linkedinBoxEl.style.display = 'none';
+  linkedinSummaryBoxEl.style.display = 'none';
   applyFiltersAndRender();
 });
 
-// Chip topic in alto
-topicChipsTop.forEach((chip) => {
-  chip.addEventListener('click', () => {
-    const alreadyActive = chip.classList.contains('active');
-    topicChipsTop.forEach((c) => c.classList.remove('active'));
-
-    if (alreadyActive) {
-      filterState.topicChip = null;
-    } else {
-      chip.classList.add('active');
-      filterState.topicChip = chip.textContent.trim();
-    }
-
-    applyFiltersAndRender();
-  });
+// Search bar (facoltativa ma utile)
+searchInputEl.addEventListener('input', () => {
+  filterState.search = searchInputEl.value || '';
+  selectedStory = null;
+  linkedinBoxEl.style.display = 'none';
+  linkedinSummaryBoxEl.style.display = 'none';
+  applyFiltersAndRender();
 });
 
-// Reset filtri
-if (resetFiltersBtn) {
-  resetFiltersBtn.addEventListener('click', () => {
-    filterState.category = 'ALL';
-    filterState.search = '';
-    filterState.timeframe = '24h';
-    filterState.topicChip = null;
-
-    categoryButtons.forEach((b) => b.classList.remove('active'));
-    const firstBtn = document.querySelector('.pill-btn[data-category="ALL"]');
-    if (firstBtn) firstBtn.classList.add('active');
-
-    timeframeRadios.forEach((r) => {
-      r.checked = r.value === '24h';
-    });
-
-    searchInputEl.value = '';
-    topicChipsTop.forEach((c) => c.classList.remove('active'));
-
-    applyFiltersAndRender();
-  });
-}
-
-// ---------- CARICAMENTO INIZIALE DA SUPABASE ----------
+// ---------- CARICAMENTO INIZIALE ----------
 
 async function loadStories() {
   loadingEl.textContent = 'Caricamento storie da Supabase…';
@@ -429,7 +426,7 @@ async function loadStories() {
     .from('stories')
     .select('*')
     .order('impact_score', { ascending: false })
-    .limit(100);
+    .limit(150);
 
   if (error) {
     console.error('Errore Supabase:', error);
