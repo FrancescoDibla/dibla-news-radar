@@ -1,28 +1,28 @@
 // api/fetch-news.js
 import Parser from 'rss-parser';
-import fetch from 'node-fetch';
 
 const parser = new Parser();
 
 // Feed RSS di test (puoi aggiungerne altri)
 const FEEDS = [
   {
-    source_name: 'CyberSecurity Italia',
-    source_url: 'https://www.cybersecitalia.it',
-    rss: 'https://www.cybersecitalia.it/feed', // se non esiste, sostituisci con feed valido
+    source_name: 'Securityinfo.it',
+    source_url: 'https://www.securityinfo.it',
+    rss: 'https://www.securityinfo.it/feed/',
     category: 'CYBER'
   },
   {
-    source_name: 'Securityinfo.it',
-    source_url: 'https://www.securityinfo.it',
-    rss: 'https://www.securityinfo.it/feed/', // feed wordpress classico
+    source_name: 'Security Magazine',
+    source_url: 'https://www.securitymagazine.com',
+    rss: 'https://www.securitymagazine.com/rss/all',
     category: 'CYBER'
   }
 ];
 
-// Helper: chiama Supabase REST
+// Helper: chiama Supabase REST usando fetch nativo (Node 18 su Vercel)
 async function supabaseRequest(path, method, body) {
   const url = `${process.env.SUPABASE_URL}/rest/v1/${path}`;
+
   const res = await fetch(url, {
     method,
     headers: {
@@ -52,11 +52,11 @@ function normalizeItem(item, feedConfig) {
     source_url: feedConfig.source_url,
     title: item.title?.slice(0, 500) || 'Senza titolo',
     description: item.contentSnippet?.slice(0, 2000) || null,
-    language: 'it', // per ora assumiamo italiano
+    language: 'it',
     link,
     published_at: published,
     category: feedConfig.category,
-    tags: [] // verrà popolato in futuro
+    tags: []
   };
 }
 
@@ -64,22 +64,19 @@ function normalizeItem(item, feedConfig) {
 async function upsertNewsRaw(items) {
   if (!items.length) return;
 
-  // Usiamo upsert sulla chiave (source_name, link)
-  // Per farlo, serve una unique constraint
-  // Assicurati di aver creato questa UNIQUE (solo una volta, via SQL editor):
-  // alter table public.news_raw
-  //   add constraint news_raw_unique_source_link unique (source_name, link);
-
+  // usa la UNIQUE (source_name, link)
   await supabaseRequest('news_raw?on_conflict=source_name,link', 'POST', items);
 }
 
-// Crea/aggiorna storie base: una story per ogni news (per ora, 1:1)
+// Crea/aggiorna storie base: una story per ogni news (per ora 1:1)
 async function upsertStoriesFromNews(items) {
+  if (!items.length) return;
+
   const stories = items.map((n) => ({
     title_it: n.title,
     summary_it: n.description,
     main_category: n.category || 'CYBER',
-    main_tags: [], // TODO: estrarre keyword
+    main_tags: [],
     timeframe_label: '24h',
     impact_score: 1,
     main_source_name: n.source_name,
