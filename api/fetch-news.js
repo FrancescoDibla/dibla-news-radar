@@ -3,22 +3,6 @@ import Parser from 'rss-parser';
 
 const parser = new Parser();
 
-// Feed RSS di test (puoi aggiungerne altri)
-const FEEDS = [
-  {
-    source_name: 'Securityinfo.it',
-    source_url: 'https://www.securityinfo.it',
-    rss: 'https://www.securityinfo.it/feed/',
-    category: 'CYBER'
-  },
-  {
-    source_name: 'Security Magazine',
-    source_url: 'https://www.securitymagazine.com',
-    rss: 'https://www.securitymagazine.com/rss/all',
-    category: 'CYBER'
-  }
-];
-
 // Helper: chiama Supabase REST usando fetch nativo (Node 18 su Vercel)
 async function supabaseRequest(path, method, body) {
   const url = `${process.env.SUPABASE_URL}/rest/v1/${path}`;
@@ -42,29 +26,59 @@ async function supabaseRequest(path, method, body) {
   return res;
 }
 
-// Normalizzazione semplice
-function normalizeItem(item, feedConfig) {
+// Legge le sorgenti RSS dalla tabella "sources"
+async function loadSources() {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/sources?enabled=eq.true`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`
+    }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Supabase error (loadSources): ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  return data || [];
+}
+
+// Normalizzazione semplice, adattata a "sources"
+function normalizeItem(item, source) {
   const published = item.isoDate || item.pubDate || new Date().toISOString();
-  const link = item.link || item.guid || feedConfig.source_url;
+  const link = item.link || item.guid || source.main_site_url || source.rss_url;
+
+  // default lingua: se nella tabella hai "language", usala, altrimenti fallback
+  const language = source.language || 'en';
+
+  // categoria principale: uso source.type se presente, altrimenti 'CYBER'
+  let mainCategory = 'CYBER';
+  if (source.type === 'vendor_it') mainCategory = 'IT';
+  if (source.type === 'cert') mainCategory = 'CYBER';
+  if (source.type === 'news_portal') mainCategory = 'CYBER';
+  if (source.type === 'vendor_security') mainCategory = 'CYBER';
 
   return {
-    source_name: feedConfig.source_name,
-    source_url: feedConfig.source_url,
+    source_name: source.name,
+    source_url: source.main_site_url || source.rss_url,
     title: item.title?.slice(0, 500) || 'Senza titolo',
     description: item.contentSnippet?.slice(0, 2000) || null,
-    language: 'it',
+    language,
     link,
     published_at: published,
-    category: feedConfig.category,
+    category: mainCategory,
     tags: []
   };
 }
 
 // Inserisce in news_raw se non esiste già (stessa fonte+link)
+// Assumo UNIQUE (source_name, link) già definita su news_raw
 async function upsertNewsRaw(items) {
   if (!items.length) return;
-
-  // usa la UNIQUE (source_name, link)
   await supabaseRequest('news_raw?on_conflict=source_name,link', 'POST', items);
 }
 
@@ -89,24 +103,39 @@ async function upsertStoriesFromNews(items) {
 // Handler Vercel
 export default async function handler(req, res) {
   try {
+    // 1. Carico le sorgenti abilitate dalla tabella "sources"
+    const sources = await loadSources();
+
+    if (!sources.length) {
+      return res.status(200).json({
+        message: 'Nessuna sorgente abilitata in sources',
+        inserted: 0
+      });
+    }
+
     const allNormalized = [];
 
-    for (const feed of FEEDS) {
+    // 2. Per ogni sorgente, scarico e parse l’RSS
+    for (const source of sources) {
+      if (!source.rss_url) continue;
+
       try {
-        const parsed = await parser.parseURL(feed.rss);
+        const parsed = await parser.parseURL(source.rss_url);
         const items = (parsed.items || []).slice(0, 10).map((it) =>
-          normalizeItem(it, feed)
+          normalizeItem(it, source)
         );
         allNormalized.push(...items);
       } catch (e) {
-        console.error('Errore parsing feed', feed.rss, e);
+        console.error('Errore parsing feed', source.rss_url, e);
       }
     }
 
+    // 3. Se non ho trovato nulla, esco
     if (!allNormalized.length) {
-      return res.status(200).json({ message: 'Nessun item trovato' });
+      return res.status(200).json({ message: 'Nessun item trovato', inserted: 0 });
     }
 
+    // 4. Upsert su news_raw e stories (1:1 per ora)
     await upsertNewsRaw(allNormalized);
     await upsertStoriesFromNews(allNormalized);
 
