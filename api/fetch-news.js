@@ -52,10 +52,8 @@ function normalizeItem(item, source) {
   const published = item.isoDate || item.pubDate || new Date().toISOString();
   const link = item.link || item.guid || source.main_site_url || source.rss_url;
 
-  // default lingua: se nella tabella hai "language", usala, altrimenti fallback
   const language = source.language || 'en';
 
-  // categoria principale: uso source.type se presente, altrimenti 'CYBER'
   let mainCategory = 'CYBER';
   if (source.type === 'vendor_it') mainCategory = 'IT';
   if (source.type === 'cert') mainCategory = 'CYBER';
@@ -75,14 +73,32 @@ function normalizeItem(item, source) {
   };
 }
 
-// Inserisce in news_raw se non esiste già (stessa fonte+link)
-// Assumo UNIQUE (source_name, link) già definita su news_raw
+// Inserisce in news_raw se non esiste già (stessa fonte+link), ignorando duplicati
 async function upsertNewsRaw(items) {
   if (!items.length) return;
-  await supabaseRequest('news_raw?on_conflict=source_name,link', 'POST', items);
+
+  const url = `${process.env.SUPABASE_URL}/rest/v1/news_raw?on_conflict=source_name,link`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: process.env.SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+      // ignora i duplicati sulla UNIQUE (source_name, link)
+      Prefer: 'resolution=ignore-duplicates,return=minimal'
+    },
+    body: JSON.stringify(items)
+  });
+
+  // se non è ok e non è 409 (che comunque ignoriamo), alza errore
+  if (!res.ok && res.status !== 409) {
+    const text = await res.text();
+    throw new Error(`Supabase error: ${res.status} ${text}`);
+  }
 }
 
-// Crea/aggiorna storie base: una story per ogni news (per ora 1:1)
+// Crea storie base: una story per ogni news (per ora 1:1)
 async function upsertStoriesFromNews(items) {
   if (!items.length) return;
 
@@ -135,7 +151,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: 'Nessun item trovato', inserted: 0 });
     }
 
-    // 4. Upsert su news_raw e stories (1:1 per ora)
+    // 4. Upsert su news_raw (ignorando duplicati) e stories (1:1 per ora)
     await upsertNewsRaw(allNormalized);
     await upsertStoriesFromNews(allNormalized);
 
